@@ -12,6 +12,7 @@
   "repository": "https://github.com/plaid/quickstart",
   "license": "ISC",
   "dependencies": {
+    "@solana/web3.js": "^1.91.8",
     "body-parser": "1.18.x",
     "cors": "^2.8.5",
     "dotenv": "^8.2.0",
@@ -20,6 +21,8 @@
     "moment": "2.22.x",
     "nodemon": "^2.0.20",
     "plaid": "^21.0.0",
+    "tweetnacl": "^1.0.3",
+    "tweetnacl-util": "^0.15.1",
     "uuid": "^9.0.0"
   }
 }

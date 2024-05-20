@@ -2,13 +2,25 @@
 
 // read env vars from .env file
 require('dotenv').config();
-const { Configuration, PlaidApi, Products, PlaidEnvironments} = require('plaid');
+const {
+  Configuration,
+  PlaidApi,
+  Products,
+  PlaidEnvironments,
+} = require('plaid');
 const util = require('util');
 const { v4: uuidv4 } = require('uuid');
 const express = require('express');
 const bodyParser = require('body-parser');
 const moment = require('moment');
 const cors = require('cors');
+const { Keypair } = require('@solana/web3.js');
+const nacl = require('tweetnacl');
+const { decodeUTF8 } = require('tweetnacl-util');
+const base58 = require('bs58');
+const { bs58 } = require('@project-serum/anchor/dist/cjs/utils/bytes');
+const { assert } = require('console');
+const { create } = require('domain');
 
 const APP_PORT = process.env.APP_PORT || 8000;
 const PLAID_CLIENT_ID = process.env.PLAID_CLIENT_ID;
@@ -18,9 +30,9 @@ const PLAID_ENV = process.env.PLAID_ENV || 'sandbox';
 // PLAID_PRODUCTS is a comma-separated list of products to use when initializing
 // Link. Note that this list must contain 'assets' in order for the app to be
 // able to create and retrieve asset reports.
-const PLAID_PRODUCTS = (process.env.PLAID_PRODUCTS || Products.Transactions).split(
-  ',',
-);
+const PLAID_PRODUCTS = (
+  process.env.PLAID_PRODUCTS || Products.Transactions
+).split(',');
 
 // PLAID_COUNTRY_CODES is a comma-separated list of countries for which users
 // will be able to select institutions from.
@@ -117,7 +129,7 @@ app.post('/api/create_link_token', function (request, response, next) {
         const statementConfig = {
           end_date: moment().format('YYYY-MM-DD'),
           start_date: moment().subtract(30, 'days').format('YYYY-MM-DD'),
-        }
+        };
         configs.statements = statementConfig;
       }
       const createTokenResponse = await client.linkTokenCreate(configs);
@@ -127,69 +139,199 @@ app.post('/api/create_link_token', function (request, response, next) {
     .catch(next);
 });
 
-// Create a link token with configs which we can then use to initialize Plaid Link client-side
-// for a 'payment-initiation' flow.
-// See:
-// - https://plaid.com/docs/payment-initiation/
-// - https://plaid.com/docs/#payment-initiation-create-link-token-request
+const signMessage = (message, keypair) => {
+  const messageBytes = decodeUTF8(message);
+  const signature = nacl.sign.detached(messageBytes, keypair.secretKey);
+  const result = nacl.sign.detached.verify(
+    messageBytes,
+    signature,
+    keypair.publicKey.toBytes(),
+  );
+
+  assert(result);
+
+  return signature;
+};
+
+const createMockUser = async () => {
+  // generate keypair to simulate wallet
+  const user = Keypair.generate();
+
+  // get message to sign from coinflow
+  const messageRes = await fetch('https://api-sandbox.coinflow.cash/api/auth', {
+    method: 'GET',
+    headers: {
+      accept: 'application/json',
+      'x-coinflow-auth-blockchain': 'solana',
+      'x-coinflow-auth-wallet': user.publicKey.toString(),
+    },
+  });
+
+  const messageJson = await messageRes.json();
+  const message = messageJson.message;
+
+  // sign message
+  const signatureBytes = signMessage(message, user);
+  // encode to base58
+  const signature = bs58.encode(signatureBytes);
+
+  // send signature to coinflow
+  // curl --request POST \
+  //     --url https://api-sandbox.coinflow.cash/api/auth \
+  //     --header 'accept: application/json' \
+  //     --header 'content-type: application/json' \
+  //     --header 'x-coinflow-auth-blockchain: solana' \
+  //     --header 'x-coinflow-auth-wallet: 264tdkV22h64eQvxj2XkeV1MgTBSjDRQfzZEiq2UcVyB'
+  //     --data '{"signature":"<signature>"}'
+  const authRes = await fetch('https://api-sandbox.coinflow.cash/api/auth', {
+    method: 'POST',
+    headers: {
+      accept: 'application/json',
+      'content-type': 'application/json',
+      'x-coinflow-auth-blockchain': 'solana',
+      'x-coinflow-auth-wallet': user.publicKey.toString(),
+    },
+    body: JSON.stringify({ signedMessage: signature }),
+  });
+
+  const authJson = await authRes.json();
+
+  return {
+    pubkey: user.publicKey.toString(),
+    jwt: authJson.jwt,
+  };
+};
+
 app.post(
-  '/api/create_link_token_for_payment',
+  '/api/convert_plaid_public_token_to_coinflow_token',
   function (request, response, next) {
+    PUBLIC_TOKEN = request.body.public_token;
+    console.log('Public token: ', PUBLIC_TOKEN);
+
     Promise.resolve()
       .then(async function () {
-        const createRecipientResponse =
-          await client.paymentInitiationRecipientCreate({
-            name: 'Harry Potter',
-            iban: 'GB33BUKB20201555555555',
-            address: {
-              street: ['4 Privet Drive'],
-              city: 'Little Whinging',
-              postal_code: '11111',
-              country: 'GB',
-            },
-          });
-        const recipientId = createRecipientResponse.data.recipient_id;
-        prettyPrintResponse(createRecipientResponse);
+        // Create test coinflow user
+        // This helper generates a new keypair, signs a message from coinflow,
+        // and returns the user's public key and coinflow jwt
+        const user = await createMockUser();
 
-        const createPaymentResponse =
-          await client.paymentInitiationPaymentCreate({
-            recipient_id: recipientId,
-            reference: 'paymentRef',
-            amount: {
-              value: 1.23,
-              currency: 'GBP',
-            },
-          });
-        prettyPrintResponse(createPaymentResponse);
-        const paymentId = createPaymentResponse.data.payment_id;
+        // Exchange token flow - exchange a Link public_token for
+        // an API access_token
+        // https://plaid.com/docs/#exchange-token-flow
+        const tokenResponse = await client.itemPublicTokenExchange({
+          public_token: PUBLIC_TOKEN,
+        });
 
-        // We store the payment_id in memory for demo purposes - in production, store it in a secure
-        // persistent data store along with the Payment metadata, such as userId.
-        PAYMENT_ID = paymentId;
+        prettyPrintResponse(tokenResponse);
+        ACCESS_TOKEN = tokenResponse.data.access_token;
+        ITEM_ID = tokenResponse.data.item_id;
 
-        const configs = {
-          client_name: 'Plaid Quickstart',
-          user: {
-            // This should correspond to a unique id for the current user.
-            // Typically, this will be a user ID number from your application.
-            // Personally identifiable information, such as an email address or phone number, should not be used here.
-            client_user_id: uuidv4(),
-          },
-          // Institutions from all listed countries will be shown.
-          country_codes: PLAID_COUNTRY_CODES,
-          language: 'en',
-          // The 'payment_initiation' product has to be the only element in the 'products' list.
-          products: [Products.PaymentInitiation],
-          payment_initiation: {
-            payment_id: paymentId,
-          },
-        };
-        if (PLAID_REDIRECT_URI !== '') {
-          configs.redirect_uri = PLAID_REDIRECT_URI;
+        // Retrieve ACH or ETF Auth data for an Item's accounts
+        // https://plaid.com/docs/#auth
+        const authResponse = await client.authGet({
+          access_token: ACCESS_TOKEN,
+        });
+
+        prettyPrintResponse(authResponse);
+
+        if (!authResponse.data.accounts.length > 0) {
+          response.json({ error: 'No accounts found' });
+          return;
         }
-        const createTokenResponse = await client.linkTokenCreate(configs);
-        prettyPrintResponse(createTokenResponse);
-        response.json(createTokenResponse.data);
+
+        const type = authResponse.data.accounts[0].subtype;
+        const routingNumber = authResponse.data.numbers.ach[0].routing;
+        const accountNumber = authResponse.data.numbers.ach[0].account;
+        const accountName = authResponse.data.accounts[0].name;
+        const accountId = authResponse.data.accounts[0].account_id;
+
+        console.log('WE GOT HERE!');
+
+        // Add bank account data to coinflow with the following curl:
+        //      curl --request POST \
+        //     --url https://api-sandbox.coinflow.cash/api/customer/bankAccount \
+        //      --header 'Authorization: 2yWZ1iUyhmUUWfwKVXnSLXAFx4YhWWc8Lr129xQDVudw' \
+        //      --header 'content-type: application/json' \
+        //      --data '
+        // {
+        //   "type": "checking",
+        //   "blockchain": "solana",
+        //   "routingNumber": "1111111111",
+        //   "account_number": "22222222222",
+        //   "email": "test@email.com",
+        //   "firstName": "testFirstName",
+        //   "lastName": "testLastName",
+        //   "address1": "123 Main street",
+        //   "city": "white plains",
+        //   "state": "new york",
+        //   "zip": "10601",
+        //   "alias": "checking",
+        //   "plaidAccountId": "12345",
+        //   "plaidAccessToken": "12345",
+        //   "wallet": "2yWZ1iUyhmUUWfwKVXnSLXAFx4YhWWc8Lr129xQDVudw"
+        // }
+        // '
+
+const addBankBody = {
+  type,
+  blockchain: 'solana',
+  routingNumber: routingNumber,
+  account_number: accountNumber,
+  email: 'test@email.com',
+  firstName: 'test',
+  lastName: 'user',
+  address1: '123 Main St',
+  city: 'White Plains',
+  state: 'NY',
+  zip: '10601',
+  alias: accountName,
+  plaidAccountId: accountId,
+  plaidAccessToken: ACCESS_TOKEN,
+  wallet: user.pubkey,
+};
+
+        console.log(addBankBody);
+
+const coinflowRes = await fetch(
+  'https://api-sandbox.coinflow.cash/api/customer/bankAccount/',
+  {
+    method: 'POST',
+    headers: {
+      Authorization:
+        'coinflow_sandbox_2e5980224585456aaf5e8fc43a111de1_e3965f2985164235891596e15cfb9711',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(addBankBody),
+  },
+);
+
+        assert(coinflowRes.status === 200);
+
+        console.log(user.jwt);
+        // Fetch customer from coinflow
+        // curl --request GET \
+        //     --url https://api-sandbox.coinflow.cash/api/customer \
+        //     --header 'Authorization: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ3YWxsZXQiOiJHVEhwckFNYVZZQnpNOGtmdlF5Q1dzMURFMm85eDVuSkVEUHRva3lkWDdqcCIsImJsb2NrY2hhaW4iOiJzb2xhbmEiLCJpYXQiOjE3MTUyMTgxNDYsImV4cCI6MTcxNTMwNDU0Nn0.hG9I_NF303TO3iVFz_90l-Hmzo0ZSp0o-mgrrs6QUeE' \
+        //     --header 'accept: application/json'
+const customerRes = await fetch(
+  'https://api-sandbox.coinflow.cash/api/customer',
+  {
+    method: 'GET',
+    headers: {
+      Authorization: user.jwt,
+      accept: 'application/json',
+      'x-coinflow-auth-wallet': user.pubkey,
+      'x-coinflow-auth-blockchain': 'solana',
+    },
+  },
+);
+
+        const customerJson = await customerRes.json();
+        console.log(JSON.stringify(customerJson));
+        // const json = await coinflowRes.json();
+        // console.log(json);
+
+        response.json({});
       })
       .catch(next);
   },
@@ -226,71 +368,9 @@ app.get('/api/auth', function (request, response, next) {
       const authResponse = await client.authGet({
         access_token: ACCESS_TOKEN,
       });
+      console.log(1);
       prettyPrintResponse(authResponse);
       response.json(authResponse.data);
-    })
-    .catch(next);
-});
-
-// Retrieve Transactions for an Item
-// https://plaid.com/docs/#transactions
-app.get('/api/transactions', function (request, response, next) {
-  Promise.resolve()
-    .then(async function () {
-      // Set cursor to empty to receive all historical updates
-      let cursor = null;
-
-      // New transaction updates since "cursor"
-      let added = [];
-      let modified = [];
-      // Removed transaction ids
-      let removed = [];
-      let hasMore = true;
-      // Iterate through each page of new transaction updates for item
-      while (hasMore) {
-        const request = {
-          access_token: ACCESS_TOKEN,
-          cursor: cursor,
-        };
-        const response = await client.transactionsSync(request)
-        const data = response.data;
-        // Add this page of results
-        added = added.concat(data.added);
-        modified = modified.concat(data.modified);
-        removed = removed.concat(data.removed);
-        hasMore = data.has_more;
-        // Update cursor to the next cursor
-        cursor = data.next_cursor;
-        prettyPrintResponse(response);
-      }
-
-      const compareTxnsByDateAscending = (a, b) => (a.date > b.date) - (a.date < b.date);
-      // Return the 8 most recent transactions
-      const recently_added = [...added].sort(compareTxnsByDateAscending).slice(-8);
-      response.json({latest_transactions: recently_added});
-    })
-    .catch(next);
-});
-
-// Retrieve Investment Transactions for an Item
-// https://plaid.com/docs/#investments
-app.get('/api/investments_transactions', function (request, response, next) {
-  Promise.resolve()
-    .then(async function () {
-      const startDate = moment().subtract(30, 'days').format('YYYY-MM-DD');
-      const endDate = moment().format('YYYY-MM-DD');
-      const configs = {
-        access_token: ACCESS_TOKEN,
-        start_date: startDate,
-        end_date: endDate,
-      };
-      const investmentTransactionsResponse =
-        await client.investmentsTransactionsGet(configs);
-      prettyPrintResponse(investmentTransactionsResponse);
-      response.json({
-        error: null,
-        investments_transactions: investmentTransactionsResponse.data,
-      });
     })
     .catch(next);
 });
@@ -450,16 +530,22 @@ app.get('/api/assets', function (request, response, next) {
 app.get('/api/statements', function (request, response, next) {
   Promise.resolve()
     .then(async function () {
-      const statementsListResponse = await client.statementsList({access_token: ACCESS_TOKEN});
+      const statementsListResponse = await client.statementsList({
+        access_token: ACCESS_TOKEN,
+      });
       prettyPrintResponse(statementsListResponse);
       const pdfRequest = {
         access_token: ACCESS_TOKEN,
-        statement_id: statementsListResponse.data.accounts[0].statements[0].statement_id  
+        statement_id:
+          statementsListResponse.data.accounts[0].statements[0].statement_id,
       };
 
-      const statementsDownloadResponse = await client.statementsDownload(pdfRequest, {
-        responseType: 'arraybuffer',
-      });
+      const statementsDownloadResponse = await client.statementsDownload(
+        pdfRequest,
+        {
+          responseType: 'arraybuffer',
+        },
+      );
       prettyPrintResponse(statementsDownloadResponse);
       response.json({
         json: statementsListResponse.data,
@@ -485,17 +571,20 @@ app.get('/api/payment', function (request, response, next) {
 
 // This endpoint is still supported but is no longer recommended
 // For Income best practices, see https://github.com/plaid/income-sample instead
-app.get('/api/income/verification/paystubs', function (request, response, next) {
-  Promise.resolve()
-  .then(async function () {
-    const paystubsGetResponse = await client.incomeVerificationPaystubsGet({
-      access_token: ACCESS_TOKEN
-    });
-    prettyPrintResponse(paystubsGetResponse);
-    response.json({ error: null, paystubs: paystubsGetResponse.data})
-  })
-  .catch(next);
-})
+app.get(
+  '/api/income/verification/paystubs',
+  function (request, response, next) {
+    Promise.resolve()
+      .then(async function () {
+        const paystubsGetResponse = await client.incomeVerificationPaystubsGet({
+          access_token: ACCESS_TOKEN,
+        });
+        prettyPrintResponse(paystubsGetResponse);
+        response.json({ error: null, paystubs: paystubsGetResponse.data });
+      })
+      .catch(next);
+  },
+);
 
 app.use('/api', function (error, request, response, next) {
   console.log(error);
@@ -560,32 +649,33 @@ app.get('/api/transfer_authorize', function (request, response, next) {
       });
       ACCOUNT_ID = accountsResponse.data.accounts[0].account_id;
 
-      const transferAuthorizationCreateResponse = await client.transferAuthorizationCreate({
-        access_token: ACCESS_TOKEN,
-        account_id: ACCOUNT_ID,
-        type: 'debit',
-        network: 'ach',
-        amount: '1.00',
-        ach_class: 'ppd',
-        user: {
-          legal_name: 'FirstName LastName',
-          email_address: 'foobar@email.com',
-          address: {
-            street: '123 Main St.',
-            city: 'San Francisco',
-            region: 'CA',
-            postal_code: '94053',
-            country: 'US',
+      const transferAuthorizationCreateResponse =
+        await client.transferAuthorizationCreate({
+          access_token: ACCESS_TOKEN,
+          account_id: ACCOUNT_ID,
+          type: 'debit',
+          network: 'ach',
+          amount: '1.00',
+          ach_class: 'ppd',
+          user: {
+            legal_name: 'FirstName LastName',
+            email_address: 'foobar@email.com',
+            address: {
+              street: '123 Main St.',
+              city: 'San Francisco',
+              region: 'CA',
+              postal_code: '94053',
+              country: 'US',
+            },
           },
-        },
-      });
+        });
       prettyPrintResponse(transferAuthorizationCreateResponse);
-      AUTHORIZATION_ID = transferAuthorizationCreateResponse.data.authorization.id;
+      AUTHORIZATION_ID =
+        transferAuthorizationCreateResponse.data.authorization.id;
       response.json(transferAuthorizationCreateResponse.data);
     })
     .catch(next);
 });
-
 
 app.get('/api/transfer_create', function (request, response, next) {
   Promise.resolve()
@@ -597,7 +687,7 @@ app.get('/api/transfer_create', function (request, response, next) {
         description: 'Debit',
       });
       prettyPrintResponse(transferCreateResponse);
-      TRANSFER_ID = transferCreateResponse.data.transfer.id
+      TRANSFER_ID = transferCreateResponse.data.transfer.id;
       response.json({
         error: null,
         transfer: transferCreateResponse.data.transfer,
@@ -618,7 +708,7 @@ app.get('/api/signal_evaluate', function (request, response, next) {
         access_token: ACCESS_TOKEN,
         account_id: ACCOUNT_ID,
         client_transaction_id: 'txn1234',
-        amount: 100.00,
+        amount: 100.0,
       });
       prettyPrintResponse(signalEvaluateResponse);
       response.json(signalEvaluateResponse.data);

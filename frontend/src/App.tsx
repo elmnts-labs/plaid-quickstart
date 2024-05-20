@@ -6,6 +6,7 @@ import Items from "./Components/ProductTypes/Items";
 import Context from "./Context";
 
 import styles from "./App.module.scss";
+import { Button } from "plaid-threads";
 
 const App = () => {
   const { linkSuccess, isItemAccess, isPaymentInitiation, dispatch } = useContext(Context);
@@ -82,15 +83,31 @@ const App = () => {
     init();
   }, [dispatch, generateToken, getInfo]);
 
+  const getCoinflowToken = useCallback(
+    async (public_token: string) => {
+      const response = await fetch("/api/set_access_token", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        },
+        body: `public_token=${public_token}`,
+      });
+    }, [])
+
   return (
     <div className={styles.App}>
       <div className={styles.container}>
         <Header />
         {linkSuccess && (
           <>
-            {isPaymentInitiation && (
-              <Products />
-            )}
+            <Button
+              type="button"
+              large
+              onClick={() => open()}
+            >
+              Get Coinflow Token
+            </Button>
+            {isPaymentInitiation && <Products />}
             {isItemAccess && (
               <>
                 <Products />
@@ -101,7 +118,7 @@ const App = () => {
         )}
       </div>
     </div>
-  );
+  )
 };
 
 export default App;

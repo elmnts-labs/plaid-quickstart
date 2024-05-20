@@ -1,8 +1,8 @@
-import React, { useContext } from "react";
+import React, { useContext } from "react"
 
-import Endpoint from "../Endpoint";
-import Context from "../../Context";
-import ProductTypesContainer from "./ProductTypesContainer";
+import Endpoint from "../Endpoint"
+import Context from "../../Context"
+import ProductTypesContainer from "./ProductTypesContainer"
 import {
   transactionsCategories,
   authCategories,
@@ -31,11 +31,11 @@ import {
   transformTransferAuthorizationData,
   transformIncomePaystubsData,
   transformSignalData,
-  transformStatementsData
-} from "../../dataUtilities";
+  transformStatementsData,
+} from "../../dataUtilities"
 
 const Products = () => {
-  const { products } = useContext(Context);
+  const { products } = useContext(Context)
   return (
     <ProductTypesContainer productType="Products">
       {products.includes("payment_initiation") && (
@@ -50,12 +50,22 @@ const Products = () => {
       )}
       {products.includes("auth") && (
         <Endpoint
-            endpoint="auth"
-            name="Auth"
-            categories={authCategories}
-            schema="/auth/get/"
-            description="Retrieve account and routing numbers for checking and savings accounts."
-            transformData={transformAuthData}
+          endpoint="auth"
+          name="Auth"
+          categories={authCategories}
+          schema="/auth/get/"
+          description="Retrieve account and routing numbers for checking and savings accounts."
+          transformData={transformAuthData}
+        />
+      )}
+      {products.includes("auth") && (
+        <Endpoint
+          endpoint="auth"
+          name="Auth"
+          categories={authCategories}
+          schema="/auth/get/"
+          description="Retrieve account and routing numbers for checking and savings accounts."
+          transformData={transformAuthData}
         />
       )}
       {products.includes("transactions") && (
@@ -70,13 +80,13 @@ const Products = () => {
       )}
       {products.includes("identity") && (
         <Endpoint
-              endpoint="identity"
-              name="Identity"
-              categories={identityCategories}
-              schema="/identity/get/"
-              description="Retrieve Identity information on file with the bank. Reduce
+          endpoint="identity"
+          name="Identity"
+          categories={identityCategories}
+          schema="/identity/get/"
+          description="Retrieve Identity information on file with the bank. Reduce
               fraud by comparing user-submitted data to validate identity."
-              transformData={transformIdentityData}
+          transformData={transformIdentityData}
         />
       )}
       {products.includes("assets") && (
@@ -90,50 +100,50 @@ const Products = () => {
         />
       )}
       {!products.includes("payment_initiation") && (
-          <Endpoint
-              endpoint="balance"
-              name="Balance"
-              categories={balanceCategories}
-              schema="/accounts/balance/get/"
-              description="Check balances in real time to prevent non-sufficient funds
+        <Endpoint
+          endpoint="balance"
+          name="Balance"
+          categories={balanceCategories}
+          schema="/accounts/balance/get/"
+          description="Check balances in real time to prevent non-sufficient funds
         fees."
-              transformData={transformBalanceData}
-          />
+          transformData={transformBalanceData}
+        />
       )}
       {products.includes("investments") && (
         <>
-        <Endpoint
-          endpoint="holdings"
-          name="Investments"
-          categories={investmentsCategories}
-          schema="/investments/holdings/get/"
-          description="Retrieve investment holdings on file with the bank,
+          <Endpoint
+            endpoint="holdings"
+            name="Investments"
+            categories={investmentsCategories}
+            schema="/investments/holdings/get/"
+            description="Retrieve investment holdings on file with the bank,
         brokerage, or investment institution. Analyze over-exposure
         to market segments."
-        transformData={transformInvestmentsData}
-      />
-      <Endpoint
-        endpoint="investments_transactions"
-        name="Investments Transactions"
-        categories={investmentsTransactionsCategories}
-        schema="/investments/transactions/get"
-        description="Retrieve investment transactions on file with the bank,
+            transformData={transformInvestmentsData}
+          />
+          <Endpoint
+            endpoint="investments_transactions"
+            name="Investments Transactions"
+            categories={investmentsTransactionsCategories}
+            schema="/investments/transactions/get"
+            description="Retrieve investment transactions on file with the bank,
         brokerage, or investments institution."
-        transformData={transformInvestmentTransactionsData}
-      />
-      <Endpoint
-        endpoint="liabilities"
-        name="Liabilities"
-        categories={liabilitiesCategories}
-        schema="/liabilities/get"
-        description="Retrieve liabilities and various details about an Item with loan or credit accounts."
-        transformData={transformLiabilitiesData}
-      />
-      </>
+            transformData={transformInvestmentTransactionsData}
+          />
+          <Endpoint
+            endpoint="liabilities"
+            name="Liabilities"
+            categories={liabilitiesCategories}
+            schema="/liabilities/get"
+            description="Retrieve liabilities and various details about an Item with loan or credit accounts."
+            transformData={transformLiabilitiesData}
+          />
+        </>
       )}
       {products.includes("transfer") && (
         <>
-        <Endpoint
+          <Endpoint
             endpoint="transfer_authorize"
             name="Transfer"
             categories={transferAuthorizationCategories}
@@ -153,7 +163,7 @@ const Products = () => {
       )}
       {products.includes("signal") && (
         <>
-        <Endpoint
+          <Endpoint
             endpoint="signal_evaluate"
             name="Signal"
             categories={signalCategories}
@@ -165,7 +175,7 @@ const Products = () => {
       )}
       {products.includes("statements") && (
         <>
-        <Endpoint
+          <Endpoint
             endpoint="statements"
             name="Statements"
             categories={statementsCategories}
@@ -184,12 +194,12 @@ const Products = () => {
           schema="/income/verification/paystubs"
           description="(Deprecated) Retrieve information from the paystubs used for income verification"
           transformData={transformIncomePaystubsData}
-          />
+        />
       )}
     </ProductTypesContainer>
-  );
-};
+  )
+}
 
-Products.displayName = "Products";
+Products.displayName = "Products"
 
-export default Products;
+export default Products
